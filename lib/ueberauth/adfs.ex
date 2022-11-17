@@ -74,10 +74,12 @@ defmodule Ueberauth.Strategy.ADFS do
   """
   require Logger
 
-  use Ueberauth.Strategy
+  use Ueberauth.Strategy, ignores_csrf_attack: true
+  use Joken.Config
 
   alias Ueberauth.Strategy.ADFS.OAuth
 
+  @impl true
   def handle_request!(conn) do
     if __MODULE__.configured?() do
       jason_lib = config(:json_library)
@@ -104,6 +106,7 @@ defmodule Ueberauth.Strategy.ADFS do
     end
   end
 
+  @impl true
   def handle_callback!(%Plug.Conn{params: %{"code" => code}} = conn) do
     with {:ok, client} <- OAuth.get_token(code, redirect_uri: callback_url(conn)) do
       fetch_user(conn, client)
@@ -126,6 +129,7 @@ defmodule Ueberauth.Strategy.ADFS do
     set_errors!(conn, [error("missing_code", "No code received")])
   end
 
+  @impl true
   def handle_cleanup!(conn) do
     conn
     |> put_private(:adfs_user, nil)
@@ -134,6 +138,7 @@ defmodule Ueberauth.Strategy.ADFS do
     |> put_private(:adfs_handler, nil)
   end
 
+  @impl true
   def uid(conn) do
     uid_field =
       conn
@@ -143,14 +148,17 @@ defmodule Ueberauth.Strategy.ADFS do
     conn.private.adfs_user[uid_field]
   end
 
+  @impl true
   def credentials(conn) do
     apply(conn.private.adfs_handler, :credentials, [conn])
   end
 
+  @impl true
   def info(conn) do
     apply(conn.private.adfs_handler, :info, [conn])
   end
 
+  @impl true
   def extra(conn) do
     apply(conn.private.adfs_handler, :extra, [conn])
   end
@@ -171,18 +179,18 @@ defmodule Ueberauth.Strategy.ADFS do
     |> URI.to_string()
   end
 
-  defp check_and_set_json_module(data) do
-    Joken.with_json_module(data, jason_module())
-  end
+  # defp check_and_set_json_module(data) do
+  # Joken.with_json_module(data, jason_module())
+  # end
 
   def make_token(payload) when is_map(payload) do
-    %Joken.Token{claims: payload}
-    |> check_and_set_json_module
+    %{claims: payload}
+    # |> check_and_set_json_module
   end
 
   def make_token(encoded_token) when is_binary(encoded_token) do
-    %Joken.Token{token: encoded_token}
-    |> check_and_set_json_module
+    %{token: encoded_token}
+    # |> check_and_set_json_module
   end
 
   defp fetch_user(conn, %{token: %{access_token: access_token} = token}) do
@@ -190,6 +198,8 @@ defmodule Ueberauth.Strategy.ADFS do
     adfs_handler = config(:adfs_handler, Ueberauth.Strategy.ADFS.DefaultHandler)
 
     conn = put_private(conn, :adfs_handler, adfs_handler)
+
+    {:ok, %{"access_token" => user_access_token}} = Poison.decode(access_token)
 
     conn =
       with {:ok, other} <- Map.fetch(token, :other_params),
@@ -203,11 +213,10 @@ defmodule Ueberauth.Strategy.ADFS do
 
     conn =
       with made_token <- make_token(access_token),
-           {:ok, validated_token} <- validate_token(made_token),
-           %Joken.Token{claims: claims_user, error: nil} <- validated_token do
+           {:ok, validated_token} <- validate_token(made_token) do
         conn
-        |> put_private(:adfs_token, validated_token)
-        |> put_private(:adfs_user, claims_user)
+        |> put_private(:adfs_token, %{token: user_access_token})
+        |> put_private(:adfs_user, validated_token)
       else
         :token_not_verified ->
           Logger.error("#{inspect(__MODULE__)} - Token Validation Failed")
@@ -225,7 +234,7 @@ defmodule Ueberauth.Strategy.ADFS do
     conn
   end
 
-  def validate_token(token = %Joken.Token{token: token_string}) do
+  def validate_token(%{token: token_string}) do
     table_name =
       try do
         :ets.new(:adfs_keys_lookup, [:set, :public, :named_table])
@@ -233,13 +242,14 @@ defmodule Ueberauth.Strategy.ADFS do
         _ -> :adfs_keys_lookup
       end
 
-    with {:ok, decoded_header} <-
-           String.split(token_string, ".") |> List.first() |> Base.decode64(),
+    with {:ok, %{"access_token" => access_token}} <- jason_module().decode(token_string),
+         {:ok, decoded_header} <-
+           String.split(access_token, ".") |> List.first() |> Base.decode64(),
          {:ok, %{"x5t" => identifier}} <- jason_module().decode(decoded_header),
          {:ok, key} <- lookup_key(table_name, identifier, :ets.lookup(table_name, identifier)),
          {:ok, certificate} <- build_cert(key) do
-      rs256_key = JOSE.JWK.from_pem(certificate) |> Joken.rs256()
-      {:ok, Joken.with_signer(token, rs256_key) |> Joken.verify()}
+      signer = Joken.Signer.create("RS256", %{"pem" => certificate})
+      Joken.Signer.verify(access_token, signer)
     else
       _ -> :token_not_verified
     end
