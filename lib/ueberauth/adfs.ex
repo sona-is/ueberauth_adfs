@@ -114,7 +114,8 @@ defmodule Ueberauth.Strategy.ADFS do
       {:error, %{reason: reason}} ->
         set_errors!(conn, [error("Authentication Error", reason)])
 
-      {:error, %OAuth2.Response{body: %{"error_description" => reason}}} ->
+      {:error, %OAuth2.Response{body: oauth2_response}} ->
+        reason = Poison.decode!(oauth2_response)["error_description"]
         set_errors!(conn, [error("Authentication Error", reason)])
     end
   end
