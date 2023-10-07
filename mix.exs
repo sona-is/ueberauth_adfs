@@ -57,7 +57,7 @@ defmodule UeberauthAdfs.MixProject do
       {:mock, "~> 0.3.0", only: :test},
       {:oauth2, "~> 2.0"},
       {:ueberauth, "~> 0.5"},
-      {:poison, "~> 3.0", optional: true}
+      {:poison, "~> 4.0", optional: true}
     ]
   end
 end
