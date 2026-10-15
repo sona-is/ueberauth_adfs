@@ -281,12 +281,15 @@ defmodule Ueberauth.Strategy.ADFS do
     end)
   end
 
+  # hackney 4 defaults `recv_timeout` to infinity (hackney 1.x: 5000 ms); keep discovery and JWKS bounded.
+  @http_options [ssl: [versions: [:"tlsv1.2"]], recv_timeout: 5_000]
+
   def keys_from_wellknown(well_known_url) do
     with {:ok, %HTTPoison.Response{body: wellknown}} <-
-           HTTPoison.get(well_known_url, [], ssl: [versions: [:"tlsv1.2"]]),
+           HTTPoison.get(well_known_url, [], @http_options),
          {:ok, %{"jwks_uri" => keys_url}} <- jason_module().decode(wellknown),
          {:ok, %HTTPoison.Response{body: keys_body}} <-
-           HTTPoison.get(keys_url, [], ssl: [versions: [:"tlsv1.2"]]),
+           HTTPoison.get(keys_url, [], @http_options),
          {:ok, %{"keys" => keys}} <- jason_module().decode(keys_body) do
       keys
     else
